@@ -17,6 +17,8 @@ app.config.update(
 # =====================================
 # POOL DE CONEXIONES A MYSQL
 # =====================================
+print("=== APP VERSION CLEVER CLOUD ===")
+print(db_config)
 
 db_config = {
     "host": "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com",
