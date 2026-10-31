@@ -35,10 +35,21 @@ try:
         pool_reset_session=True,
         **db_config
     )
-    print("Pool de conexiones a MySQL iniciado correctamente")
+
+    print("=== MYSQL OK ===")
+    print(db_config)
+
 except Exception as e:
-    print(f"Error al iniciar el pool de conexiones: {e}")
+
+    print("=== MYSQL ERROR ===")
+    print(db_config)
+    print(e)
+
     db_pool = None
+
+
+
+
 
 
 def obtener_conexion():
