@@ -1,0 +1,920 @@
+CREAR_ARCHIVO: ventas.py
+from flask import Blueprint, request, redirect, url_for, flash, jsonify
+from decimal import Decimal, InvalidOperation
+import html
+import json
+
+ventas_bp = Blueprint("ventas", __name__, url_prefix="/ventas")
+
+
+def _obtener_conexion():
+    from app import obtener_conexion
+    return obtener_conexion()
+
+
+def _render(titulo, contenido):
+    from app import render_layout
+    return render_layout(titulo, contenido, seccion_activa="ventas")
+
+
+def _asegurar_tablas(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS venta (
+            id_venta INT AUTO_INCREMENT PRIMARY KEY,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
+            cliente_nombre VARCHAR(150) NOT NULL,
+            metodo_pago VARCHAR(50) NOT NULL DEFAULT 'Efectivo',
+            total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            observaciones VARCHAR(255) NULL,
+            estado VARCHAR(20) NOT NULL DEFAULT 'COMPLETADA'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS detalle_venta (
+            id_detalle INT AUTO_INCREMENT PRIMARY KEY,
+            id_venta INT NOT NULL,
+            codigo_producto VARCHAR(50) NOT NULL,
+            nombre_producto VARCHAR(150) NOT NULL,
+            cantidad INT NOT NULL,
+            precio_unitario DECIMAL(12,2) NOT NULL,
+            subtotal DECIMAL(12,2) NOT NULL,
+            INDEX idx_venta (id_venta),
+            CONSTRAINT fk_detalle_venta FOREIGN KEY (id_venta)
+                REFERENCES venta(id_venta) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """)
+
+
+@ventas_bp.route("/")
+def listar_ventas():
+    conexion = None
+    cursor = None
+    ventas = []
+
+    try:
+        conexion = _obtener_conexion()
+        cursor = conexion.cursor()
+        _asegurar_tablas(cursor)
+        conexion.commit()
+
+        cursor.execute("""
+            SELECT v.id_venta,
+                   v.fecha,
+                   v.cliente_nombre,
+                   v.metodo_pago,
+                   v.total,
+                   v.estado,
+                   COUNT(d.id_detalle) AS total_items
+            FROM venta v
+            LEFT JOIN detalle_venta d ON v.id_venta = d.id_venta
+            GROUP BY v.id_venta, v.fecha, v.cliente_nombre, v.metodo_pago, v.total, v.estado
+            ORDER BY v.id_venta DESC
+        """)
+        ventas = cursor.fetchall()
+    except Exception as e:
+        flash(f"Error al cargar las ventas: {e}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+    total_facturado = sum(float(v[4]) for v in ventas if v[5] == "COMPLETADA")
+    ventas_completadas = sum(1 for v in ventas if v[5] == "COMPLETADA")
+
+    filas_html = ""
+    for v in ventas:
+        id_venta = v[0]
+        fecha_str = v[1].strftime("%d/%m/%Y %H:%M") if hasattr(v[1], "strftime") else str(v[1])
+        cliente = html.escape(str(v[2]))
+        metodo = html.escape(str(v[3]))
+        total = float(v[4])
+        estado = v[5]
+        items_count = int(v[6])
+
+        if estado == "COMPLETADA":
+            badge_estado = '<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle me-1"></i>Completada</span>'
+        else:
+            badge_estado = '<span class="badge bg-danger-subtle text-danger border border-danger-subtle"><i class="bi bi-x-circle me-1"></i>Anulada</span>'
+
+        filas_html += f"""
+        <tr>
+            <td class="font-monospace fw-bold text-primary">#{id_venta:05d}</td>
+            <td class="text-secondary small">{fecha_str}</td>
+            <td class="fw-semibold text-dark">{cliente}</td>
+            <td><span class="badge bg-secondary-subtle text-secondary-emphasis">{metodo}</span></td>
+            <td><span class="badge bg-info-subtle text-info-emphasis">{items_count} art.</span></td>
+            <td class="font-monospace fw-bold text-dark">${total:,.2f}</td>
+            <td>{badge_estado}</td>
+            <td class="text-end">
+                <div class="btn-group btn-group-sm">
+                    <a href="/ventas/comprobante/{id_venta}" class="btn btn-outline-primary" title="Ver Comprobante">
+                        <i class="bi bi-receipt"></i> Comprobante
+                    </a>
+                    {f'''
+                    <form action="/ventas/anular/{id_venta}" method="POST" class="d-inline" onsubmit="return confirm('¿Seguro que deseas anular esta venta y devolver el stock al inventario?');">
+                        <button type="submit" class="btn btn-outline-danger" title="Anular venta y reponer stock">
+                            <i class="bi bi-arrow-counterclockwise"></i> Anular
+                        </button>
+                    </form>
+                    ''' if estado == 'COMPLETADA' else ''}
+                </div>
+            </td>
+        </tr>
+        """
+
+    if not ventas:
+        filas_html = """
+        <tr>
+            <td colspan="8" class="text-center text-muted py-5">
+                <i class="bi bi-cart-x fs-1 d-block mb-2 text-secondary"></i>
+                No se registran ventas realizadas todavía.
+            </td>
+        </tr>
+        """
+
+    contenido = f"""
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h1 class="h3 fw-bold mb-1">Módulo de Ventas</h1>
+            <p class="text-muted mb-0">Facturación, registro de operaciones de mostrador y gestión de comprobantes.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="/" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Panel
+            </a>
+            <a href="/ventas/nueva" class="btn btn-success shadow-sm">
+                <i class="bi bi-cart-plus-fill"></i> Nueva Venta
+            </a>
+        </div>
+    </div>
+
+    <!-- TARJETAS DE RESUMEN -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="card metric-card shadow-sm p-3 h-100" style="border-left-color: #10b981;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="text-uppercase text-secondary fw-semibold small">Ventas Concretadas</span>
+                        <h2 class="h3 fw-bold text-dark mt-1 mb-0">{ventas_completadas}</h2>
+                    </div>
+                    <div class="bg-success bg-opacity-10 text-success p-3 rounded-circle">
+                        <i class="bi bi-cart-check fs-3"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card metric-card shadow-sm p-3 h-100" style="border-left-color: #3b82f6;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="text-uppercase text-secondary fw-semibold small">Total Facturado</span>
+                        <h2 class="h3 fw-bold text-dark mt-1 mb-0">${total_facturado:,.2f}</h2>
+                    </div>
+                    <div class="bg-primary bg-opacity-10 text-primary p-3 rounded-circle">
+                        <i class="bi bi-cash-stack fs-3"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card metric-card shadow-sm p-3 h-100" style="border-left-color: #8b5cf6;">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="text-uppercase text-secondary fw-semibold small">Total Registros</span>
+                        <h2 class="h3 fw-bold text-dark mt-1 mb-0">{len(ventas)}</h2>
+                    </div>
+                    <div class="bg-purple bg-opacity-10 text-info p-3 rounded-circle">
+                        <i class="bi bi-clock-history fs-3"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card table-card shadow-sm border-0">
+        <div class="card-header bg-white py-3 border-bottom d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <h5 class="fw-bold text-dark mb-0">Historial de Comprobantes</h5>
+                <span class="badge bg-primary text-white rounded-pill">{len(ventas)}</span>
+            </div>
+            <div class="col-md-4">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text bg-light border-end-0"><i class="bi bi-search text-muted"></i></span>
+                    <input type="text" id="buscadorVentas" class="form-control border-start-0 bg-light" placeholder="Buscar por cliente, ID o método...">
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="tablaVentas">
+                <thead>
+                    <tr>
+                        <th>Nº Venta</th>
+                        <th>Fecha y Hora</th>
+                        <th>Cliente</th>
+                        <th>Método Pago</th>
+                        <th>Artículos</th>
+                        <th>Total</th>
+                        <th>Estado</th>
+                        <th class="text-end">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {filas_html}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {{
+            inicializarBuscador('buscadorVentas', 'tablaVentas');
+        }});
+    </script>
+    """
+    return _render("Módulo de Ventas", contenido)
+
+
+@ventas_bp.route("/nueva", methods=["GET", "POST"])
+def nueva_venta():
+    if request.method == "POST":
+        cliente_nombre = request.form.get("cliente_nombre", "").strip() or "Consumidor Final"
+        metodo_pago = request.form.get("metodo_pago", "Efectivo").strip()
+        observaciones = request.form.get("observaciones", "").strip()
+        items_json = request.form.get("items_json", "[]")
+
+        try:
+            items = json.loads(items_json)
+        except Exception:
+            flash("Error en el formato de los artículos seleccionados.", "danger")
+            return redirect(url_for("ventas.nueva_venta"))
+
+        if not items:
+            flash("Debe agregar al menos un producto a la venta.", "warning")
+            return redirect(url_for("ventas.nueva_venta"))
+
+        conexion = None
+        cursor = None
+        try:
+            conexion = _obtener_conexion()
+            cursor = conexion.cursor()
+            _asegurar_tablas(cursor)
+
+            total_venta = Decimal("0.00")
+            items_procesados = []
+
+            for item in items:
+                codigo = str(item.get("codigo", "")).strip()
+                cantidad = int(item.get("cantidad", 0))
+
+                if not codigo or cantidad <= 0:
+                    raise ValueError("Cantidad no válida para uno de los artículos.")
+
+                cursor.execute("""
+                    SELECT nombre, precio_venta, stock_actual
+                    FROM producto
+                    WHERE codigo = %s
+                    FOR UPDATE
+                """, (codigo,))
+                prod = cursor.fetchone()
+
+                if not prod:
+                    raise ValueError(f"El producto con código '{codigo}' no existe.")
+
+                nombre_prod = prod[0]
+                precio_unitario = Decimal(str(prod[1]))
+                stock_actual = int(prod[2])
+
+                if stock_actual < cantidad:
+                    raise ValueError(
+                        f"Stock insuficiente para '{nombre_prod}' ({codigo}). "
+                        f"Disponible: {stock_actual}, Solicitado: {cantidad}."
+                    )
+
+                subtotal = precio_unitario * Decimal(cantidad)
+                total_venta += subtotal
+
+                items_procesados.append({
+                    "codigo": codigo,
+                    "nombre": nombre_prod,
+                    "cantidad": cantidad,
+                    "precio": precio_unitario,
+                    "subtotal": subtotal,
+                    "nuevo_stock": stock_actual - cantidad
+                })
+
+            cursor.execute("""
+                INSERT INTO venta (cliente_nombre, metodo_pago, total, observaciones, estado)
+                VALUES (%s, %s, %s, %s, 'COMPLETADA')
+            """, (cliente_nombre, metodo_pago, total_venta, observaciones))
+            id_venta = cursor.lastrowid
+
+            for it in items_procesados:
+                cursor.execute("""
+                    INSERT INTO detalle_venta
+                        (id_venta, codigo_producto, nombre_producto, cantidad, precio_unitario, subtotal)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (id_venta, it["codigo"], it["nombre"], it["cantidad"], it["precio"], it["subtotal"]))
+
+                cursor.execute("""
+                    UPDATE producto
+                    SET stock_actual = %s
+                    WHERE codigo = %s
+                """, (it["nuevo_stock"], it["codigo"]))
+
+            conexion.commit()
+            flash(f"¡Venta #{id_venta:05d} registrada exitosamente por ${total_venta:,.2f}!", "success")
+            return redirect(url_for("ventas.comprobante", id_venta=id_venta))
+
+        except ValueError as ve:
+            if conexion:
+                conexion.rollback()
+            flash(str(ve), "warning")
+            return redirect(url_for("ventas.nueva_venta"))
+        except Exception as e:
+            if conexion:
+                conexion.rollback()
+            flash(f"Error procesando la venta: {e}", "danger")
+            return redirect(url_for("ventas.nueva_venta"))
+        finally:
+            if cursor:
+                cursor.close()
+            if conexion:
+                conexion.close()
+
+    productos = []
+    clientes = []
+    conexion = None
+    cursor = None
+    try:
+        conexion = _obtener_conexion()
+        cursor = conexion.cursor()
+        cursor.execute("""
+            SELECT codigo, nombre, precio_venta, stock_actual
+            FROM producto
+            ORDER BY nombre
+        """)
+        productos = cursor.fetchall()
+
+        cursor.execute("SELECT nombre FROM cliente ORDER BY nombre")
+        clientes = cursor.fetchall()
+    except Exception as e:
+        flash(f"Error al cargar catálogo para venta: {e}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+    catalogo_json = json.dumps([
+        {
+            "codigo": str(p[0]),
+            "nombre": str(p[1]),
+            "precio": float(p[2]),
+            "stock": int(p[3])
+        }
+        for p in productos
+    ])
+
+    clientes_options = '<option value="Consumidor Final">Consumidor Final (Mostrador)</option>' + "".join(
+        f'<option value="{html.escape(str(c[0]))}">{html.escape(str(c[0]))}</option>'
+        for c in clientes
+    )
+
+    contenido = f"""
+    <div class="row justify-content-center">
+        <div class="col-xl-11">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h1 class="h3 fw-bold mb-0">Nueva Operación de Venta</h1>
+                    <small class="text-muted">Carga de productos y emisión directa de ticket o comprobante.</small>
+                </div>
+                <a href="/ventas" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Cancelar y Volver
+                </a>
+            </div>
+
+            <form id="formVenta" method="POST" action="/ventas/nueva" onsubmit="return prepararEnvio();">
+                <input type="hidden" name="items_json" id="itemsJsonInput" value="[]">
+
+                <div class="row g-3">
+                    <!-- PANEL IZQUIERDO: DETALLES DE VENTA Y SELECCIÓN -->
+                    <div class="col-lg-8">
+                        <div class="card shadow-sm border-0 mb-3">
+                            <div class="card-header bg-primary text-white py-3">
+                                <h5 class="fw-bold mb-0 d-flex align-items-center gap-2">
+                                    <i class="bi bi-cart3"></i> Agregar Artículos al Carrito
+                                </h5>
+                            </div>
+                            <div class="card-body p-4">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-7">
+                                        <label class="form-label fw-semibold text-secondary">Seleccionar Producto:</label>
+                                        <select id="selectProducto" class="form-select" onchange="actualizarInfoProducto()">
+                                            <option value="">Buscar o seleccionar producto...</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2 col-6">
+                                        <label class="form-label fw-semibold text-secondary">Cantidad:</label>
+                                        <input type="number" id="inputCantidad" class="form-control" value="1" min="1" step="1">
+                                    </div>
+                                    <div class="col-md-3 col-6">
+                                        <button type="button" class="btn btn-success w-100" onclick="agregarAlCarrito()">
+                                            <i class="bi bi-plus-circle-fill"></i> Agregar
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div id="infoProductoSeleccionado" class="mt-3 p-3 bg-light rounded border d-none">
+                                    <div class="d-flex justify-content-between align-items-center small">
+                                        <div>
+                                            <span class="text-secondary">Precio Unitario:</span>
+                                            <strong class="text-dark font-monospace fs-6" id="infoPrecio">$0.00</strong>
+                                        </div>
+                                        <div>
+                                            <span class="text-secondary">Stock Disponible:</span>
+                                            <strong class="font-monospace fs-6" id="infoStock">0 u.</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TABLA DE ARTÍCULOS EN CARRITO -->
+                        <div class="card shadow-sm border-0 table-card">
+                            <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                                <h6 class="fw-bold mb-0 text-dark">
+                                    <i class="bi bi-list-check"></i> Detalle de Artículos a Facturar
+                                </h6>
+                                <button type="button" class="btn btn-outline-danger btn-sm" onclick="vaciarCarrito()">
+                                    <i class="bi bi-trash"></i> Vaciar Carrito
+                                </button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0" id="tablaCarrito">
+                                    <thead>
+                                        <tr>
+                                            <th>Código</th>
+                                            <th>Descripción</th>
+                                            <th class="text-center" style="width: 110px;">Cant.</th>
+                                            <th>Precio Unit.</th>
+                                            <th>Subtotal</th>
+                                            <th class="text-end" style="width: 60px;"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="carritoTbody">
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted py-4">
+                                                No hay artículos agregados todavía.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PANEL DERECHO: TOTALES Y CONFIRMACIÓN -->
+                    <div class="col-lg-4">
+                        <div class="card shadow-sm border-0 sticky-top" style="top: 85px;">
+                            <div class="card-header bg-dark text-white py-3">
+                                <h5 class="fw-bold mb-0 d-flex align-items-center gap-2">
+                                    <i class="bi bi-cash-coin"></i> Resumen de Venta
+                                </h5>
+                            </div>
+                            <div class="card-body p-4">
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold text-secondary">Cliente (*):</label>
+                                    <select name="cliente_nombre" class="form-select" required>
+                                        {clientes_options}
+                                    </select>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold text-secondary">Método de Pago (*):</label>
+                                    <select name="metodo_pago" class="form-select" required>
+                                        <option value="Efectivo" selected>💵 Efectivo</option>
+                                        <option value="Tarjeta de Débito">💳 Tarjeta de Débito</option>
+                                        <option value="Tarjeta de Crédito">💳 Tarjeta de Crédito</option>
+                                        <option value="Transferencia / QR">📱 Transferencia Bancaria / QR</option>
+                                        <option value="Cuenta Corriente">📑 Cuenta Corriente</option>
+                                    </select>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold text-secondary">Observaciones:</label>
+                                    <textarea name="observaciones" class="form-control" rows="2" placeholder="Notas adicionales de la venta..."></textarea>
+                                </div>
+
+                                <hr>
+
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="text-secondary">Cant. de Ítems:</span>
+                                    <strong id="resumenTotalItems" class="font-monospace">0</strong>
+                                </div>
+
+                                <div class="d-flex justify-content-between align-items-center mb-4">
+                                    <span class="fs-5 fw-bold text-dark">TOTAL:</span>
+                                    <span class="fs-3 fw-bolder text-primary font-monospace" id="resumenTotalPrecio">$0.00</span>
+                                </div>
+
+                                <button type="submit" id="btnConfirmarVenta" class="btn btn-success btn-lg w-100 shadow-sm" disabled>
+                                    <i class="bi bi-check-circle-fill"></i> Registrar y Emitir Venta
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const catalogo = {catalogo_json};
+        let carrito = [];
+
+        document.addEventListener('DOMContentLoaded', () => {{
+            const selectProd = document.getElementById('selectProducto');
+            catalogo.forEach(prod => {{
+                const opt = document.createElement('option');
+                opt.value = prod.codigo;
+                opt.textContent = `${{prod.codigo}} - ${{prod.nombre}} ($${{prod.precio.toFixed(2)}} | Stock: ${{prod.stock}})`;
+                selectProd.appendChild(opt);
+            }});
+        }});
+
+        function actualizarInfoProducto() {{
+            const codigo = document.getElementById('selectProducto').value;
+            const infoBox = document.getElementById('infoProductoSeleccionado');
+            const infoPrecio = document.getElementById('infoPrecio');
+            const infoStock = document.getElementById('infoStock');
+            const inputCantidad = document.getElementById('inputCantidad');
+
+            if (!codigo) {{
+                infoBox.classList.add('d-none');
+                return;
+            }}
+
+            const prod = catalogo.find(p => p.codigo === codigo);
+            if (prod) {{
+                infoPrecio.textContent = '$' + prod.precio.toLocaleString('es-AR', {{minimumFractionDigits: 2}});
+                infoStock.textContent = prod.stock + ' u.';
+                infoStock.className = prod.stock > 0 ? 'text-success font-monospace fs-6' : 'text-danger font-monospace fs-6';
+                inputCantidad.max = prod.stock;
+                infoBox.classList.remove('d-none');
+            }}
+        }}
+
+        function agregarAlCarrito() {{
+            const codigo = document.getElementById('selectProducto').value;
+            const cantidad = parseInt(document.getElementById('inputCantidad').value) || 0;
+
+            if (!codigo) {{
+                alert('Por favor selecciona un producto.');
+                return;
+            }}
+
+            const prod = catalogo.find(p => p.codigo === codigo);
+            if (!prod) return;
+
+            if (prod.stock <= 0) {{
+                alert('El producto seleccionado no tiene stock disponible.');
+                return;
+            }}
+
+            const itemExistente = carrito.find(it => it.codigo === codigo);
+            const cantTotal = (itemExistente ? itemExistente.cantidad : 0) + cantidad;
+
+            if (cantTotal > prod.stock) {{
+                alert(`No hay stock suficiente. Stock máximo disponible: ${{prod.stock}} u.`);
+                return;
+            }}
+
+            if (itemExistente) {{
+                itemExistente.cantidad = cantTotal;
+                itemExistente.subtotal = itemExistente.cantidad * itemExistente.precio;
+            }} else {{
+                carrito.push({{
+                    codigo: prod.codigo,
+                    nombre: prod.nombre,
+                    precio: prod.precio,
+                    cantidad: cantidad,
+                    subtotal: cantidad * prod.precio
+                }});
+            }}
+
+            document.getElementById('selectProducto').value = '';
+            document.getElementById('inputCantidad').value = 1;
+            document.getElementById('infoProductoSeleccionado').classList.add('d-none');
+            renderizarCarrito();
+        }}
+
+        function actualizarCantidadItem(codigo, nuevaCant) {{
+            const item = carrito.find(it => it.codigo === codigo);
+            const prod = catalogo.find(p => p.codigo === codigo);
+            if (!item || !prod) return;
+
+            nuevaCant = parseInt(nuevaCant) || 1;
+            if (nuevaCant <= 0) nuevaCant = 1;
+
+            if (nuevaCant > prod.stock) {{
+                alert(`Stock máximo disponible: ${{prod.stock}} u.`);
+                nuevaCant = prod.stock;
+            }}
+
+            item.cantidad = nuevaCant;
+            item.subtotal = item.cantidad * item.precio;
+            renderizarCarrito();
+        }}
+
+        function eliminarDelCarrito(codigo) {{
+            carrito = carrito.filter(it => it.codigo !== codigo);
+            renderizarCarrito();
+        }}
+
+        function vaciarCarrito() {{
+            if (carrito.length === 0) return;
+            if (confirm('¿Vaciar todos los artículos del carrito?')) {{
+                carrito = [];
+                renderizarCarrito();
+            }}
+        }}
+
+        function renderizarCarrito() {{
+            const tbody = document.getElementById('carritoTbody');
+            const resumenItems = document.getElementById('resumenTotalItems');
+            const resumenTotal = document.getElementById('resumenTotalPrecio');
+            const btnConfirmar = document.getElementById('btnConfirmarVenta');
+
+            if (carrito.length === 0) {{
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            No hay artículos agregados todavía.
+                        </td>
+                    </tr>
+                `;
+                resumenItems.textContent = '0';
+                resumenTotal.textContent = '$0.00';
+                btnConfirmar.disabled = true;
+                return;
+            }}
+
+            let total = 0;
+            let totalUnidades = 0;
+            let htmlFilas = '';
+
+            carrito.forEach(it => {{
+                total += it.subtotal;
+                totalUnidades += it.cantidad;
+                htmlFilas += `
+                    <tr>
+                        <td class="font-monospace fw-bold text-primary">${{it.codigo}}</td>
+                        <td class="fw-semibold text-dark">${{it.nombre}}</td>
+                        <td class="text-center">
+                            <input type="number" min="1" class="form-control form-control-sm text-center"
+                                   value="${{it.cantidad}}" onchange="actualizarCantidadItem('${{it.codigo}}', this.value)">
+                        </td>
+                        <td class="font-monospace">$${{it.precio.toFixed(2)}}</td>
+                        <td class="font-monospace fw-bold text-dark">$${{it.subtotal.toFixed(2)}}</td>
+                        <td class="text-end">
+                            <button type="button" class="btn btn-outline-danger btn-sm p-1" onclick="eliminarDelCarrito('${{it.codigo}}')">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }});
+
+            tbody.innerHTML = htmlFilas;
+            resumenItems.textContent = totalUnidades;
+            resumenTotal.textContent = '$' + total.toLocaleString('es-AR', {{minimumFractionDigits: 2}});
+            btnConfirmar.disabled = false;
+        }}
+
+        function prepararEnvio() {{
+            if (carrito.length === 0) {{
+                alert('Debe agregar al menos un artículo a la venta.');
+                return false;
+            }}
+            document.getElementById('itemsJsonInput').value = JSON.stringify(carrito);
+            return true;
+        }}
+    </script>
+    """
+    return _render("Nueva Venta", contenido)
+
+
+@ventas_bp.route("/comprobante/<int:id_venta>")
+def comprobante(id_venta):
+    conexion = None
+    cursor = None
+    venta = None
+    detalles = []
+
+    try:
+        conexion = _obtener_conexion()
+        cursor = conexion.cursor()
+        _asegurar_tablas(cursor)
+
+        cursor.execute("""
+            SELECT id_venta, fecha, cliente_nombre, metodo_pago, total, observaciones, estado
+            FROM venta
+            WHERE id_venta = %s
+        """, (id_venta,))
+        venta = cursor.fetchone()
+
+        if venta:
+            cursor.execute("""
+                SELECT codigo_producto, nombre_producto, cantidad, precio_unitario, subtotal
+                FROM detalle_venta
+                WHERE id_venta = %s
+                ORDER BY id_detalle ASC
+            """, (id_venta,))
+            detalles = cursor.fetchall()
+    except Exception as e:
+        flash(f"Error al obtener el comprobante: {e}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+    if not venta:
+        flash(f"No se encontró el comprobante para la venta #{id_venta}.", "warning")
+        return redirect(url_for("ventas.listar_ventas"))
+
+    fecha_str = venta[1].strftime("%d/%m/%Y %H:%M:%S") if hasattr(venta[1], "strftime") else str(venta[1])
+    cliente = html.escape(str(venta[2]))
+    metodo = html.escape(str(venta[3]))
+    total = float(venta[4])
+    observaciones = html.escape(str(venta[5] or "Sin observaciones"))
+    estado = venta[6]
+
+    filas_detalles = ""
+    for d in detalles:
+        cod = html.escape(str(d[0]))
+        nom = html.escape(str(d[1]))
+        cant = int(d[2])
+        precio_u = float(d[3])
+        sub = float(d[4])
+
+        filas_detalles += f"""
+        <tr>
+            <td class="font-monospace text-primary fw-bold">{cod}</td>
+            <td class="fw-semibold text-dark">{nom}</td>
+            <td class="text-center font-monospace">{cant}</td>
+            <td class="text-end font-monospace">${precio_u:,.2f}</td>
+            <td class="text-end font-monospace fw-bold">${sub:,.2f}</td>
+        </tr>
+        """
+
+    contenido = f"""
+    <div class="row justify-content-center">
+        <div class="col-lg-8 col-md-10">
+            <!-- BOTONES DE ACCIÓN SUPERIOR -->
+            <div class="d-flex justify-content-between align-items-center mb-3 d-print-none">
+                <a href="/ventas" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Volver a Ventas
+                </a>
+                <div class="d-flex gap-2">
+                    <a href="/ventas/nueva" class="btn btn-success">
+                        <i class="bi bi-plus-lg"></i> Nueva Venta
+                    </a>
+                    <button type="button" class="btn btn-primary" onclick="window.print()">
+                        <i class="bi bi-printer-fill"></i> Imprimir Ticket
+                    </button>
+                </div>
+            </div>
+
+            <!-- TICKET / COMPROBANTE FACTURA -->
+            <div class="card shadow border-0 p-4 bg-white" id="comprobanteImprimible">
+                <div class="row border-bottom pb-3 mb-3">
+                    <div class="col-sm-6">
+                        <h4 class="fw-bold mb-0 text-dark">🔨 Ferretería CANJER</h4>
+                        <small class="text-muted d-block">Suministros Industriales y del Hogar</small>
+                        <small class="text-muted d-block">CUIT: 30-71982341-9 &bull; IVA Responsable Inscripto</small>
+                        <small class="text-muted">Av. San Martín 1540, Buenos Aires</small>
+                    </div>
+                    <div class="col-sm-6 text-sm-end mt-3 mt-sm-0">
+                        <span class="badge {'bg-success' if estado == 'COMPLETADA' else 'bg-danger'} fs-6 px-3 py-2 mb-2">
+                            {estado}
+                        </span>
+                        <h5 class="fw-bold text-primary font-monospace mb-0">COMPROBANTE #{id_venta:05d}</h5>
+                        <small class="text-secondary d-block">Fecha: {fecha_str}</small>
+                    </div>
+                </div>
+
+                <div class="row mb-4">
+                    <div class="col-sm-6">
+                        <span class="text-secondary small fw-semibold text-uppercase">Datos del Cliente</span>
+                        <div class="fw-bold fs-6 text-dark">{cliente}</div>
+                    </div>
+                    <div class="col-sm-6 text-sm-end mt-2 mt-sm-0">
+                        <span class="text-secondary small fw-semibold text-uppercase">Forma de Pago</span>
+                        <div class="fw-semibold text-dark">{metodo}</div>
+                    </div>
+                </div>
+
+                <div class="table-responsive mb-4">
+                    <table class="table table-sm table-bordered align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Cód.</th>
+                                <th>Descripción</th>
+                                <th class="text-center">Cant.</th>
+                                <th class="text-end">Precio Unit.</th>
+                                <th class="text-end">Subtotal</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filas_detalles}
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <th colspan="4" class="text-end fs-5 py-2">TOTAL:</th>
+                                <th class="text-end fs-5 text-primary py-2 font-monospace">${total:,.2f}</th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <div class="p-3 bg-light rounded small text-secondary mb-3">
+                    <strong>Observaciones:</strong> {observaciones}
+                </div>
+
+                <div class="text-center text-muted small border-top pt-3">
+                    <p class="mb-0">¡Gracias por su compra en Ferretería CANJER!</p>
+                    <p class="mb-0">Documento de control interno no válido como factura fiscal.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        @media print {{
+            .navbar, footer, .d-print-none {{
+                display: none !important;
+            }}
+            body {{
+                background-color: #ffffff !important;
+            }}
+            .card {{
+                box-shadow: none !important;
+                border: none !important;
+            }}
+        }}
+    </style>
+    """
+    return _render(f"Comprobante #{id_venta:05d}", contenido)
+
+
+@ventas_bp.route("/anular/<int:id_venta>", methods=["POST"])
+def anular_venta(id_venta):
+    conexion = None
+    cursor = None
+    try:
+        conexion = _obtener_conexion()
+        cursor = conexion.cursor()
+        _asegurar_tablas(cursor)
+
+        cursor.execute("SELECT estado FROM venta WHERE id_venta = %s FOR UPDATE", (id_venta,))
+        fila = cursor.fetchone()
+
+        if not fila:
+            flash(f"La venta #{id_venta} no existe.", "danger")
+            return redirect(url_for("ventas.listar_ventas"))
+
+        if fila[0] == "ANULADA":
+            flash(f"La venta #{id_venta} ya se encuentra anulada.", "warning")
+            return redirect(url_for("ventas.listar_ventas"))
+
+        cursor.execute("""
+            SELECT codigo_producto, cantidad
+            FROM detalle_venta
+            WHERE id_venta = %s
+        """, (id_venta,))
+        detalles = cursor.fetchall()
+
+        for cod, cant in detalles:
+            cursor.execute("""
+                UPDATE producto
+                SET stock_actual = stock_actual + %s
+                WHERE codigo = %s
+            """, (cant, cod))
+
+        cursor.execute("UPDATE venta SET estado = 'ANULADA' WHERE id_venta = %s", (id_venta,))
+        conexion.commit()
+        flash(f"Venta #{id_venta:05d} anulada correctamente y stock reincorporado al catálogo.", "success")
+    except Exception as e:
+        if conexion:
+            conexion.rollback()
+        flash(f"Error al anular la venta: {e}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+    return redirect(url_for("ventas.listar_ventas"))

@@ -1,0 +1,3 @@
+RESPUESTA:
+
+Por favor, indica qué acción deseas realizar en el proyecto. Puedes solicitar crear módulos (por ejemplo, proveedores), refactorizar app.py, implementar nuevos CRUDs o corregir errores.
