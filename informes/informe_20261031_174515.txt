@@ -1,0 +1,40 @@
+RESPUESTA:
+
+DIAGNOSTICO
+
+El error "El pool de base de datos no esta disponible" se genera exclusivamente en la linea 44 de app.py dentro de la funcion obtener_conexion(), la cual comprueba si la variable global db_pool es None.
+
+Esto confirma que durante el arranque del servicio en Clever Cloud, la creacion del pool en el bloque try/except de app.py lanzo una excepcion, se capturo con except Exception, imprimio el error en los logs del servidor y asigno db_pool = None. Al no existir un mecanismo de recuperacion, reintento o inicializacion bajo demanda, la variable queda nula de forma permanente para todas las peticiones HTTP subsiguientes.
+
+
+CAUSAS PROBABLES Y EVIDENCIA ENCONTRADA
+
+1. Credenciales fijas vs variables de entorno inyectadas por Clever Cloud (Causa principal mas frecuente)
+- Evidencia: En app.py lineas 23-29, db_config esta hardcodeado con host "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com", puerto 3306, usuario y clave fijos. No se utiliza os.environ.
+- Explicacion: En Clever Cloud, las aplicaciones vinculadas a un add-on MySQL reciben variables de entorno del sistema (MYSQL_ADDON_HOST, MYSQL_ADDON_PORT, MYSQL_ADDON_DB, MYSQL_ADDON_USER, MYSQL_ADDON_PASSWORD). Si el add-on rota credenciales, cambia de puerto o requiere ser accedido mediante la red privada interna (o si la resolucion DNS externa hacia services.clever-cloud.com se bloquea o demora en el contenedor de despliegue), la conexion rechaza o agota el tiempo de espera (timeout) al inicio.
+
+2. Inicializacion estatica en tiempo de importacion bajo uWSGI / Pre-forking
+- Evidencia: db_pool = pooling.MySQLConnectionPool(...) se ejecuta en el cuerpo principal de app.py (lineas 31-41), es decir, en el momento exacto en que el modulo se importa.
+- Explicacion: En desarrollo local (python app.py o flask run) hay un unico proceso que levanta de inmediato en la red de tu maquina. En Clever Cloud, uWSGI arranca en modo master pre-forking: importa app.py antes de que la red este completamente operativa o antes de forquear los procesos workers. Si la conexion falla durante ese segundo de arranque del contenedor, el pool muere antes de atender la primera peticion. Ademas, compartir descriptores de conexion de MySQL creados en el proceso master entre workers forqueados genera fallos de socket en mysql-connector.
+
+3. Requerimientos de SSL/TLS y timeout de conexion en Linux/Clever Cloud
+- Evidencia: En db_config no se definen parametros de ssl_disabled, ssl_ca o connect_timeout.
+- Explicacion: Localmente en Windows, mysql-connector-python suele negociar la conexion sin forzar validaciones estrictas de certificados. En contenedores Linux (Clever Cloud), segun la version de mysql-connector-python instalada en requirements.txt, el cliente puede exigir TLS o fallar en el handshake SSL si no se especifica explicitamente la configuracion ssl o timeout.
+
+4. Descarte de importaciones circulares
+- Evidencia: Se revisaron app.py, auth.py, ventas.py, cheques.py, proveedores.py y analisis.py. Ningun modulo satelite importa obtener_conexion en la cabecera (nivel de modulo); todos lo hacen de forma diferida dentro de sus funciones (def _obtener_conexion(): from app import obtener_conexion). Por lo tanto, una importacion circular no es la que esta vaciando la variable db_pool.
+
+
+PLAN MINIMO DE CORRECCION (SIN CODIFICAR TODAVIA)
+
+1. Parametrizar db_config con variables de entorno:
+Leer prioritariamente MYSQL_ADDON_HOST, MYSQL_ADDON_PORT, MYSQL_ADDON_DB, MYSQL_ADDON_USER y MYSQL_ADDON_PASSWORD mediante os.environ.get(), manteniendo los valores actuales solo como respaldo para entorno local.
+
+2. Implementar inicializacion perezosa (Lazy Pool / Reconexion automatica):
+Mover la creacion del pool fuera del nivel global estatico. Dentro de obtener_conexion(), si db_pool es None o esta cerrado, intentar crearlo en ese momento con bloque de bloqueo (lock) o reconexion controlada en lugar de lanzar una excepcion fatal inmediata.
+
+3. Ajustar parametros de conexion para uWSGI y Clever Cloud:
+Incorporar connect_timeout (por ejemplo 10 segundos) y parametros de SSL compatibles en db_config para evitar caidas por latencia de red durante el handshake.
+
+4. Mejorar el logging de arranque:
+Configurar logging explicito para que, si el pool falla, el traceback exacto (host no resuelto, acceso denegado, timeout o ssl error) quede visible en la consola de Clever Cloud.

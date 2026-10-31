@@ -1,0 +1,12 @@
+RESPUESTA:
+
+Comandos y módulos disponibles en Ferretería CANJER:
+
+- Analiza el proyecto: Diagnóstico de arquitectura, base de datos y seguridad.
+- Crea modulo compras: Gestión de órdenes de compra a proveedores.
+- Corrige errores: Revisión de sintaxis, tipos y consultas SQL.
+- Refactoriza app.py: Optimización de rutas o desacoplamiento.
+- Genera CRUD clientes: Altas, bajas y modificaciones completas de clientes.
+- Ejecutar app.py: Comprobar inicio del servidor Flask.
+
+Escribe la tarea que deseas realizar para continuar.

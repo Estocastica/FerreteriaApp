@@ -1,0 +1,7 @@
+RESPUESTA:
+
+Comando no reconocido. Puedes indicar una tarea específica para el proyecto Ferretería CANJER, como por ejemplo:
+- Analizar el estado actual del proyecto
+- Crear o ampliar módulos (compras, caja, auditoría, reportes)
+- Corregir errores o refactorizar archivos existentes
+- Generar scripts o pruebas de ejecución

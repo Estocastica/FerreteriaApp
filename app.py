@@ -1,8 +1,10 @@
 import os
 import secrets
+import threading
 from decimal import Decimal, InvalidOperation
 from flask import Flask, request, redirect, url_for, flash, get_flashed_messages, session
-from mysql.connector import pooling
+import mysql.connector
+from mysql.connector import pooling, errors
 import html
 from auth import PERFILES, autenticar, inicio_actual, perfil_actual, registrar_control_acceso, rol_actual
 
@@ -15,36 +17,87 @@ app.config.update(
 )
 
 # =====================================
-# POOL DE CONEXIONES A MYSQL
+# POOL DE CONEXIONES A MYSQL (LAZY)
 # =====================================
 
+_pool_lock = threading.Lock()
+db_pool = None
 
-db_config = {
-    "host": "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com",
-    "port": 3306,
-    "user": "u29kmphcoi5dtsu0",
-    "password": "pA3Hzhcrn2yJ1U8FUkXw",
-    "database": "bqshk0tmkut51l0b7443"
-}
 
-try:
-    db_pool = pooling.MySQLConnectionPool(
-        pool_name="ferreteria_pool",
+def _obtener_config_mysql():
+    return {
+        "host": (
+            os.environ.get("MYSQL_ADDON_HOST")
+            or os.environ.get("MYSQLHOST")
+            or os.environ.get("MYSQL_HOST")
+            or "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com"
+        ),
+        "port": int(
+            os.environ.get("MYSQL_ADDON_PORT")
+            or os.environ.get("MYSQLPORT")
+            or os.environ.get("MYSQL_PORT")
+            or 3306
+        ),
+        "user": (
+            os.environ.get("MYSQL_ADDON_USER")
+            or os.environ.get("MYSQLUSER")
+            or os.environ.get("MYSQL_USER")
+            or "u29kmphcoi5dtsu0"
+        ),
+        "password": (
+            os.environ.get("MYSQL_ADDON_PASSWORD")
+            or os.environ.get("MYSQLPASSWORD")
+            or os.environ.get("MYSQL_PASSWORD")
+            or "pA3Hzhcrn2yJ1U8FUkXw"
+        ),
+        "database": (
+            os.environ.get("MYSQL_ADDON_DB")
+            or os.environ.get("MYSQLDATABASE")
+            or os.environ.get("MYSQL_DATABASE")
+            or "bqshk0tmkut51l0b7443"
+        ),
+        "connect_timeout": 10,
+    }
+
+
+def _crear_pool():
+    cfg = _obtener_config_mysql()
+    pid = os.getpid()
+    pool_nombre = f"ferreteria_pool_{pid}"
+    return pooling.MySQLConnectionPool(
+        pool_name=pool_nombre,
         pool_size=4,
         pool_reset_session=True,
-        **db_config
+        **cfg
     )
-    print("Pool de conexiones a MySQL iniciado correctamente")
 
-except Exception as e:
-    print(f"Error al iniciar el pool de conexiones: {e}")
-    db_pool = None
+
+def obtener_pool():
+    global db_pool
+    if db_pool is None:
+        with _pool_lock:
+            if db_pool is None:
+                db_pool = _crear_pool()
+    return db_pool
 
 
 def obtener_conexion():
-    if db_pool is None:
-        raise Exception("El pool de base de datos no está disponible.")
-    return db_pool.get_connection()
+    global db_pool
+    for intento in range(2):
+        try:
+            pool = obtener_pool()
+            conexion = pool.get_connection()
+            if conexion.is_connected():
+                return conexion
+            conexion.reconnect(attempts=2, delay=1)
+            return conexion
+        except Exception as error:
+            print(f"Reintentando conexión con MySQL (intento {intento + 1}): {error}")
+            with _pool_lock:
+                db_pool = None
+            if intento == 1:
+                cfg = _obtener_config_mysql()
+                return mysql.connector.connect(**cfg)
 
 
 # =====================================
@@ -670,7 +723,7 @@ def inicio():
 
     <!-- ACCESOS RÁPIDOS DESTACADOS -->
     <div class="card shadow-sm border-0 mb-4">
-        <div class="card-header bg-white py-3 border-bottom">
+        <div class="card-header bg-white py-3 border-bottom d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
             <h5 class="card-title fw-bold text-dark mb-0 d-flex align-items-center gap-2">
                 <i class="bi bi-lightning-charge-fill text-warning"></i> Accesos Rápidos
             </h5>

@@ -1,0 +1,9 @@
+RESPUESTA:
+
+No se especificó una instrucción clara. ¿En qué tarea del sistema puedo ayudarte?
+
+Opciones disponibles:
+- Analizar el proyecto y estado de la base de datos
+- Refactorizar o corregir errores en módulos existentes (ventas, cheques, proveedores, clientes, stock)
+- Crear un nuevo módulo o funcionalidad (por ejemplo: compras, presupuestos, categorías)
+- Ejecutar pruebas o scripts de verificación
