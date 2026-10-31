@@ -30,19 +30,14 @@ db_config = {
 try:
     db_pool = pooling.MySQLConnectionPool(
         pool_name="ferreteria_pool",
-        pool_size=5,
+        pool_size=1,
         pool_reset_session=True,
         **db_config
     )
-
-
+    print("Pool de conexiones a MySQL iniciado correctamente")
 
 except Exception as e:
-
-    print("=== MYSQL ERROR ===")
-    print(db_config)
-    print(e)
-
+    print(f"Error al iniciar el pool de conexiones: {e}")
     db_pool = None
 
 
