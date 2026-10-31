@@ -58,10 +58,6 @@ def autenticar(username, password):
             hash_ingresado = hashlib.sha256(password.encode("utf-8")).hexdigest()
             valido = hmac.compare_digest(hash_ingresado.lower(), hash_guardado.lower())
             if valido:
-                cursor.execute(
-                    "UPDATE usuario SET password_hash = %s WHERE id_usuario = %s",
-                    (generate_password_hash(password), usuario[0])
-                )
                 conexion.commit()
         else:
             try:
