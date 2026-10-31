@@ -23,7 +23,7 @@ db_config = {
     "port": 3306,
     "user": "u29kmphcoi5dtsu0",
     "password": "pA3Hzhcrn2yJ1U8FUkXw",
-    "database": "bqshk0tmkut51l0b7443Tables"
+    "database": "bqshk0tmkut51l0b7443"
 }
 
 try:

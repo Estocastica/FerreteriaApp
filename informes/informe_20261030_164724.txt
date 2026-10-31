@@ -11,11 +11,11 @@ app.secret_key = "ferreteria_secret_key_prod"
 # =====================================
 
 db_config = {
-    "host": "localhost",
-    "port": 3307,
-    "user": "root",
-    "password": "1234",
-    "database": "ferreteria"
+    "host": "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com",
+    "port": 3306,
+    "user": "u29kmphcoi5dtsu0",
+    "password": "pA3Hzhcrn2yJ1U8FUkXw",
+    "database": "bqshk0tmkut51l0b7443Tables"
 }
 
 try:
