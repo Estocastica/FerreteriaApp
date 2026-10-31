@@ -3,7 +3,7 @@ import hmac
 import re
 
 from flask import redirect, request, session, url_for
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 PERFILES = {
@@ -54,6 +54,7 @@ def autenticar(username, password):
             return None
 
         hash_guardado = str(usuario[3])
+        if re.fullmatch(r"[0-9a-fA-F]{64}", hash_guardado):
             hash_ingresado = hashlib.sha256(password.encode("utf-8")).hexdigest()
             valido = hmac.compare_digest(hash_ingresado.lower(), hash_guardado.lower())
             if valido:
