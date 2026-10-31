@@ -30,7 +30,7 @@ db_config = {
 try:
     db_pool = pooling.MySQLConnectionPool(
         pool_name="ferreteria_pool",
-        pool_size=1,
+        pool_size=4,
         pool_reset_session=True,
         **db_config
     )

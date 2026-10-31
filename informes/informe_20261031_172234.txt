@@ -1,0 +1,3 @@
+RESPUESTA:
+
+Sistema listo. Por favor indica qué tarea o acción deseas realizar en el proyecto (por ejemplo: analizar el código, corregir errores, crear un nuevo módulo o refactorizar).

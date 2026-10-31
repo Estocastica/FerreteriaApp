@@ -1,0 +1,23 @@
+RESPUESTA:
+
+ESTADO Y CONTEXTO GENERAL DEL SISTEMA FERRETERIA CANJER
+
+1. ARQUITECTURA Y TECNOLOGIAS
+El sistema esta construido con Python y Flask, persistencia en base de datos MySQL (Clever Cloud) mediante pool de conexiones (MySQLConnectionPool) e interfaz unificada construida con Bootstrap 5.3.3 y Bootstrap Icons. Dispone de arquitectura modular desacoplada mediante Blueprints.
+
+2. MODULOS IMPLEMENTADOS Y FUNCIONALIDADES
+- Autenticacion y Roles (auth.py): Control de acceso por perfiles (Propietario/ADMIN, Administracion, Deposito, Vendedor) con verificacion de permisos por endpoint y metodo HTTP. Soporta hashes seguros y migracion de credenciales.
+- Panel Principal y Dashboard (app.py): Vista consolidada de metricas clave, totales de ventas acumuladas a 7 y 30 dias, alertas de stock critico, cheques proximos a vencer y clientes con utilizacion superior al 70% de su limite de credito.
+- Catalogo de Productos (app.py): CRUD completo con validacion de tipos y rangos, control de stock actual y stock minimo, asignacion de categorias y busqueda en tiempo real.
+- Ventas y Facturacion (ventas.py): Registro de operaciones en mostrador con selector rapido de productos, control de existencias en tiempo real, descuento transaccional de inventario (FOR UPDATE), generacion de comprobantes imprimibles, soporte para contado y cuenta corriente, y anulacion de comprobantes con reincorporacion automatica de stock.
+- Cartera de Clientes y Cuenta Corriente (app.py): Directorio de clientes con tipo (minorista/mayorista), limites asignados, seguimiento de saldos pendientes y visualizacion de porcentaje de utilizacion crediticia.
+- Proveedores (proveedores.py): Directorio comercial con razon social, telefono, correo electronico, filtros por estado (activos/inactivos) y control de reactivacion o baja logica.
+- Cheques y Pagos (cheques.py): Administracion de cheques recibidos y emitidos, vinculo directo con clientes y proveedores, transicion de estados (En cartera, Depositado, Cobrado, Rechazado) y deteccion de vencimientos criticos dentro de la ventana de 7 dias.
+- Centro de Alertas (app.py): Pantalla unificada que agrupa reposicion urgente de inventario y seguimiento de cheques pendientes de cobro o vencidos.
+- Exportacion y Analisis (analisis.py): Descarga de datasets operativos en formato CSV con codificacion UTF-8 BOM y proteccion contra inyeccion de formulas para planillas de calculo (Ventas detalladas, Cuenta corriente, Cheques y Stock).
+
+3. SEGURIDAD Y ESTABILIDAD
+- Proteccion contra inyecciones SQL mediante consultas 100% parametrizadas.
+- Saneamiento de salida contra ataques XSS con html.escape en todas las vistas renderizadas.
+- Manejo seguro de transacciones (commit y rollback) y liberacion de cursores y conexiones del pool en bloques try/finally.
+- Cookies de sesion protegidas con banderas HttpOnly y SameSite.
