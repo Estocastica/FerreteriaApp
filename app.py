@@ -19,11 +19,11 @@ app.config.update(
 # =====================================
 
 db_config = {
-    "host": "localhost",
-    "port": 3307,
-    "user": "root",
-    "password": "1234",
-    "database": "ferreteria"
+    "host": "bqshk0tmkut51l0b7443-mysql.services.clever-cloud.com",
+    "port": 3306,
+    "user": "u29kmphcoi5dtsu0",
+    "password": "pA3Hzhcrn2yJ1U8FUkXw",
+    "database": "bqshk0tmkut51l0b7443Tables"
 }
 
 try:
@@ -358,7 +358,7 @@ def login():
         <main class="container min-vh-100 d-flex align-items-center justify-content-center py-4">
             <section class="card border-0 shadow-sm" style="width: min(100%, 960px);">
                 <div class="card-body p-4 p-md-5">
-                    <div class="row g-4 g-lg-5">
+                    <di class="row g-4 g-lg-5">
                         <div class="col-lg-5">
                             <h1 class="h3 fw-bold mb-1">Ferretería CANJER</h1>
                             <p class="text-muted mb-4">Inicia sesión para continuar</p>
