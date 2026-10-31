@@ -36,7 +36,7 @@ try:
         **db_config
     )
 
-    print("=== MYSQL OK ===")
+    print("POOL OK")
     print(db_config)
 
 except Exception as e:
@@ -46,8 +46,6 @@ except Exception as e:
     print(e)
 
     db_pool = None
-
-
 
 
 
