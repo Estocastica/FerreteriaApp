@@ -48,6 +48,7 @@ PERMISOS = {
 VISTAS_ADMINISTRACION_BLOQUEADAS = {
     "productos_nuevo",
     "ventas.nueva_venta",
+    "clientes_actualizar_limite",
 }
 
 

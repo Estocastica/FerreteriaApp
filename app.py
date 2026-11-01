@@ -799,6 +799,9 @@ def inicio():
             </div>
         </div>
     </div>
+    <p class="text-center text-muted small mt-4 mb-0">
+        APP realizada por Eva Sacco · <a href="mailto:evasacco@gmail.com" class="link-secondary">evasacco@gmail.com</a>
+    </p>
     """
     return render_layout("Panel Principal", contenido, seccion_activa="inicio")
 
@@ -1341,6 +1344,10 @@ def productos_eliminar(codigo):
 
 @app.route("/clientes")
 def clientes():
+    estado = request.args.get("estado", "activos")
+    if estado not in {"activos", "inactivos", "todos"}:
+        estado = "activos"
+    puede_gestionar = rol_actual() in {"ADMIN", "ADMINISTRACION"}
     conexion = None
     cursor = None
     filas = []
@@ -1348,11 +1355,11 @@ def clientes():
     try:
         conexion = obtener_conexion()
         cursor = conexion.cursor()
-        cursor.execute("""
-            SELECT nombre,
-                   tipo,
-                   limite_credito
+        condicion = "WHERE activo = 1" if estado == "activos" else "WHERE activo = 0" if estado == "inactivos" else ""
+        cursor.execute(f"""
+            SELECT id_cliente, nombre, tipo, telefono, limite_credito, activo
             FROM cliente
+            {condicion}
             ORDER BY nombre
         """)
         filas = cursor.fetchall()
@@ -1366,30 +1373,54 @@ def clientes():
 
     filas_html = ""
     for fila in filas:
-        nombre = html.escape(str(fila[0]))
-        tipo = html.escape(str(fila[1]))
-        limite = float(fila[2])
+        id_cliente = int(fila[0])
+        nombre = html.escape(str(fila[1]))
+        tipo = html.escape(str(fila[2]))
+        telefono = html.escape(str(fila[3] or "—"))
+        limite = float(fila[4])
+        activo = bool(fila[5])
 
-        # Badge visual para tipo de cliente
-        badge_tipo = '<span class="badge bg-primary-subtle text-primary border border-primary-subtle">Mayorista</span>' if "mayor" in tipo.lower() else '<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Minorista</span>'
+        etiqueta_tipo = {
+            "CONSUMIDOR_FINAL": "Consumidor final",
+            "EMPRESA": "Empresa",
+            "INSTITUCIONAL": "Institucional",
+        }.get(str(fila[2]), str(fila[2]))
+        badge_tipo = f'<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">{html.escape(etiqueta_tipo)}</span>'
+
+        if puede_gestionar:
+            etiqueta_estado = "Desactivar" if activo else "Reactivar"
+            clase_estado = "outline-danger" if activo else "outline-success"
+            icono_estado = "bi-person-dash" if activo else "bi-person-check"
+            acciones_html = f"""
+            <td class="text-end text-nowrap">
+                <a class="btn btn-sm btn-outline-primary" href="{url_for('clientes_editar', id_cliente=id_cliente)}" title="Editar cliente">
+                    <i class="bi bi-pencil"></i><span class="visually-hidden">Editar</span>
+                </a>
+                <form class="d-inline" method="post" action="{url_for('clientes_cambiar_estado', id_cliente=id_cliente)}">
+                    <button class="btn btn-sm btn-{clase_estado}" type="submit" title="{etiqueta_estado} cliente">
+                        <i class="bi {icono_estado}"></i><span class="visually-hidden">{etiqueta_estado}</span>
+                    </button>
+                </form>
+            </td>
+            """
+        else:
+            acciones_html = ""
 
         filas_html += f"""
         <tr>
-            <td class="fw-bold text-dark d-flex align-items-center gap-2">
-                <div class="rounded-circle bg-secondary bg-opacity-10 p-2 d-inline-flex">
-                    <i class="bi bi-person text-secondary"></i>
-                </div>
-                <span>{nombre}</span>
-            </td>
+            <td class="fw-bold text-dark">{nombre}</td>
             <td>{badge_tipo}</td>
+            <td>{telefono}</td>
             <td class="fw-semibold font-monospace">${limite:,.2f}</td>
+            <td><span class="badge text-bg-{'success' if activo else 'secondary'}">{'Activo' if activo else 'Inactivo'}</span></td>
+            {acciones_html}
         </tr>
         """
 
     if not filas:
-        filas_html = """
+        filas_html = f"""
         <tr>
-            <td colspan="3" class="text-center text-muted py-5">
+            <td colspan="{6 if puede_gestionar else 5}" class="text-center text-muted py-5">
                 <i class="bi bi-people fs-1 d-block mb-2 text-secondary"></i>
                 No hay clientes registrados en la base de datos.
             </td>
@@ -1403,6 +1434,7 @@ def clientes():
             <p class="text-muted mb-0">Listado de cuentas corrientes y límites de crédito asignados.</p>
         </div>
         <div>
+            {f'<a href="{url_for("clientes_nuevo")}" class="btn btn-primary me-2"><i class="bi bi-plus-lg"></i> Nuevo cliente</a>' if puede_gestionar else ''}
             <a href="/cuenta-corriente" class="btn btn-outline-primary me-2">
                 <i class="bi bi-credit-card-2-front"></i> Cuenta corriente
             </a>
@@ -1415,13 +1447,23 @@ def clientes():
     <div class="card table-card shadow-sm border-0">
         <div class="card-header bg-white py-3 border-bottom d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
             <div class="d-flex align-items-center gap-2">
-                <h5 class="fw-bold text-dark mb-0">Clientes Activos</h5>
+                <h5 class="fw-bold text-dark mb-0">Clientes</h5>
                 <span class="badge bg-success text-white rounded-pill">{len(filas)}</span>
             </div>
-            <div class="col-md-4">
-                <div class="input-group input-group-sm">
+            <div class="d-flex gap-2 align-items-end">
+                <form method="get" class="d-flex gap-2 align-items-end">
+                    <div><label class="form-label small mb-1" for="estadoCliente">Estado</label>
+                        <select id="estadoCliente" name="estado" class="form-select form-select-sm">
+                            <option value="activos" {'selected' if estado == 'activos' else ''}>Activos</option>
+                            <option value="inactivos" {'selected' if estado == 'inactivos' else ''}>Inactivos</option>
+                            <option value="todos" {'selected' if estado == 'todos' else ''}>Todos</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-outline-primary" title="Filtrar"><i class="bi bi-funnel"></i></button>
+                </form>
+                <div class="input-group input-group-sm" style="max-width: 240px">
                     <span class="input-group-text bg-light border-end-0"><i class="bi bi-search text-muted"></i></span>
-                    <input type="text" id="buscadorClientes" class="form-control border-start-0 bg-light" placeholder="Filtrar por nombre o tipo...">
+                    <input type="text" id="buscadorClientes" class="form-control border-start-0 bg-light" placeholder="Buscar cliente...">
                 </div>
             </div>
         </div>
@@ -1431,7 +1473,10 @@ def clientes():
                     <tr>
                         <th>Nombre y Apellido / Razón Social</th>
                         <th>Tipo de Cliente</th>
+                        <th>Teléfono</th>
                         <th>Límite de Crédito</th>
+                        <th>Estado</th>
+                        {"<th>Acciones</th>" if puede_gestionar else ""}
                     </tr>
                 </thead>
                 <tbody>
@@ -1448,6 +1493,219 @@ def clientes():
     </script>
     """
     return render_layout("Clientes", contenido, seccion_activa="clientes")
+
+
+TIPOS_CLIENTE = {
+    "CONSUMIDOR_FINAL": "Consumidor final",
+    "EMPRESA": "Empresa",
+    "INSTITUCIONAL": "Institucional",
+}
+
+
+def validar_datos_cliente(nombre, tipo, telefono):
+    nombre = str(nombre or "").strip()
+    tipo = str(tipo or "").strip()
+    telefono = str(telefono or "").strip() or None
+    if not nombre:
+        raise ValueError("El nombre o razón social es obligatorio.")
+    if tipo not in TIPOS_CLIENTE:
+        raise ValueError("Selecciona un tipo de cliente válido.")
+    return nombre, tipo, telefono
+
+
+@app.route("/clientes/nuevo", methods=["GET", "POST"])
+def clientes_nuevo():
+    if request.method == "POST":
+        try:
+            nombre, tipo, telefono = validar_datos_cliente(
+                request.form.get("nombre"),
+                request.form.get("tipo"),
+                request.form.get("telefono"),
+            )
+        except ValueError as error:
+            flash(str(error), "warning")
+            return redirect(url_for("clientes_nuevo"))
+
+        conexion = None
+        cursor = None
+        try:
+            conexion = obtener_conexion()
+            cursor = conexion.cursor()
+            cursor.execute("""
+                INSERT INTO cliente (nombre, tipo, telefono, limite_credito, activo)
+                VALUES (%s, %s, %s, 0.00, 1)
+            """, (nombre, tipo, telefono))
+            conexion.commit()
+            flash(f"Cliente '{nombre}' registrado con límite de crédito en $0.00.", "success")
+            return redirect(url_for("clientes"))
+        except Exception as error:
+            if conexion:
+                conexion.rollback()
+            flash(f"No se pudo registrar el cliente: {error}", "danger")
+        finally:
+            if cursor:
+                cursor.close()
+            if conexion:
+                conexion.close()
+
+    opciones_tipo = "".join(
+        f'<option value="{clave}">{etiqueta}</option>'
+        for clave, etiqueta in TIPOS_CLIENTE.items()
+    )
+    contenido = f"""
+    <div class="row justify-content-center"><div class="col-lg-7">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1 class="h3 fw-bold mb-0">Nuevo cliente</h1>
+            <a href="{url_for('clientes')}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver</a>
+        </div>
+        <section class="card border-0 shadow-sm"><div class="card-body p-4">
+            <form method="post">
+                <div class="mb-3"><label class="form-label" for="nombreCliente">Nombre o razón social</label>
+                    <input id="nombreCliente" class="form-control" name="nombre" required autofocus></div>
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label" for="tipoCliente">Tipo</label>
+                        <select id="tipoCliente" class="form-select" name="tipo" required>{opciones_tipo}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="telefonoCliente">Teléfono</label>
+                        <input id="telefonoCliente" class="form-control" name="telefono" type="tel"></div>
+                </div>
+                <p class="form-text mt-3">El cliente se registra con límite de crédito $0.00. El Propietario podrá modificarlo desde Cuenta corriente.</p>
+                <div class="d-flex justify-content-end gap-2 mt-4">
+                    <a href="{url_for('clientes')}" class="btn btn-light">Cancelar</a>
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg"></i> Registrar cliente</button>
+                </div>
+            </form>
+        </div></section>
+    </div></div>
+    """
+    return render_layout("Nuevo cliente", contenido, seccion_activa="clientes")
+
+
+@app.route("/clientes/editar/<int:id_cliente>", methods=["GET", "POST"])
+def clientes_editar(id_cliente):
+    if request.method == "POST":
+        try:
+            nombre, tipo, telefono = validar_datos_cliente(
+                request.form.get("nombre"),
+                request.form.get("tipo"),
+                request.form.get("telefono"),
+            )
+        except ValueError as error:
+            flash(str(error), "warning")
+            return redirect(url_for("clientes_editar", id_cliente=id_cliente))
+
+        conexion = None
+        cursor = None
+        try:
+            conexion = obtener_conexion()
+            cursor = conexion.cursor()
+            cursor.execute("""
+                UPDATE cliente
+                SET nombre = %s, tipo = %s, telefono = %s
+                WHERE id_cliente = %s
+            """, (nombre, tipo, telefono, id_cliente))
+            if cursor.rowcount == 0:
+                cursor.execute("SELECT id_cliente FROM cliente WHERE id_cliente = %s", (id_cliente,))
+                if not cursor.fetchone():
+                    flash("El cliente no existe.", "warning")
+                    return redirect(url_for("clientes"))
+            conexion.commit()
+            flash("Datos del cliente actualizados.", "success")
+            return redirect(url_for("clientes"))
+        except Exception as error:
+            if conexion:
+                conexion.rollback()
+            flash(f"No se pudo actualizar el cliente: {error}", "danger")
+        finally:
+            if cursor:
+                cursor.close()
+            if conexion:
+                conexion.close()
+
+    cliente = None
+    conexion = None
+    cursor = None
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor()
+        cursor.execute("""
+            SELECT nombre, tipo, telefono
+            FROM cliente
+            WHERE id_cliente = %s
+        """, (id_cliente,))
+        cliente = cursor.fetchone()
+    except Exception as error:
+        flash(f"No se pudo cargar el cliente: {error}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+    if not cliente:
+        flash("El cliente solicitado no existe.", "warning")
+        return redirect(url_for("clientes"))
+
+    nombre_actual = html.escape(str(cliente[0]), quote=True)
+    telefono_actual = html.escape(str(cliente[2] or ""), quote=True)
+    opciones_tipo = "".join(
+        f'<option value="{clave}"{" selected" if str(cliente[1]) == clave else ""}>{etiqueta}</option>'
+        for clave, etiqueta in TIPOS_CLIENTE.items()
+    )
+    contenido = f"""
+    <div class="row justify-content-center"><div class="col-lg-7">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1 class="h3 fw-bold mb-0">Editar cliente</h1>
+            <a href="{url_for('clientes')}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Volver</a>
+        </div>
+        <section class="card border-0 shadow-sm"><div class="card-body p-4">
+            <form method="post">
+                <div class="mb-3"><label class="form-label" for="nombreCliente">Nombre o razón social</label>
+                    <input id="nombreCliente" class="form-control" name="nombre" value="{nombre_actual}" required autofocus></div>
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label" for="tipoCliente">Tipo</label>
+                        <select id="tipoCliente" class="form-select" name="tipo" required>{opciones_tipo}</select></div>
+                    <div class="col-md-6"><label class="form-label" for="telefonoCliente">Teléfono</label>
+                        <input id="telefonoCliente" class="form-control" name="telefono" type="tel" value="{telefono_actual}"></div>
+                </div>
+                <p class="form-text mt-3">El límite de crédito se administra exclusivamente desde Cuenta corriente.</p>
+                <div class="d-flex justify-content-end gap-2 mt-4">
+                    <a href="{url_for('clientes')}" class="btn btn-light">Cancelar</a>
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-save"></i> Guardar cambios</button>
+                </div>
+            </form>
+        </div></section>
+    </div></div>
+    """
+    return render_layout("Editar cliente", contenido, seccion_activa="clientes")
+
+
+@app.route("/clientes/estado/<int:id_cliente>", methods=["POST"])
+def clientes_cambiar_estado(id_cliente):
+    conexion = None
+    cursor = None
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor()
+        cursor.execute("""
+            UPDATE cliente
+            SET activo = CASE WHEN activo = 1 THEN 0 ELSE 1 END
+            WHERE id_cliente = %s
+        """, (id_cliente,))
+        if cursor.rowcount == 0:
+            flash("El cliente no existe.", "warning")
+        else:
+            conexion.commit()
+            flash("Estado del cliente actualizado.", "success")
+    except Exception as error:
+        if conexion:
+            conexion.rollback()
+        flash(f"No se pudo cambiar el estado del cliente: {error}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+    return redirect(url_for("clientes"))
 
 
 # =====================================
@@ -1482,6 +1740,7 @@ def cuenta_corriente():
             conexion.close()
 
     filas = ""
+    es_admin = rol_actual() == "ADMIN"
     saldo_total = Decimal("0.00")
     for cuenta in cuentas:
         id_cliente, nombre, tipo, limite, cargos, cobros = cuenta
@@ -1495,6 +1754,15 @@ def cuenta_corriente():
         clase_saldo = "text-danger fw-bold" if porcentaje is not None and porcentaje >= 70 else "fw-semibold"
         nombre_html = html.escape(str(nombre))
         tipo_html = html.escape(str(tipo))
+        accion_limite = f"""
+            <td class="text-end">
+                <form method="post" action="{url_for('clientes_actualizar_limite', id_cliente=id_cliente)}" class="d-flex justify-content-end gap-1">
+                    <label class="visually-hidden" for="limite-{id_cliente}">Nuevo límite de {nombre_html}</label>
+                    <input id="limite-{id_cliente}" class="form-control form-control-sm text-end" style="width: 120px" type="number" name="limite_credito" min="0" step="0.01" value="{limite:.2f}" required>
+                    <button class="btn btn-sm btn-outline-primary" type="submit" title="Guardar límite"><i class="bi bi-save"></i><span class="visually-hidden">Guardar</span></button>
+                </form>
+            </td>
+        """ if es_admin else ""
         filas += f"""
         <tr>
             <td class="fw-semibold">{nombre_html}</td>
@@ -1504,11 +1772,12 @@ def cuenta_corriente():
             <td class="text-end">${cobros:,.2f}</td>
             <td class="text-end {clase_saldo}">${saldo:,.2f}</td>
             <td class="text-end">{porcentaje_html}</td>
+            {accion_limite}
         </tr>
         """
 
     if not filas:
-        filas = '<tr><td colspan="7" class="py-4 text-center text-muted">No hay cuentas corrientes para mostrar.</td></tr>'
+        filas = f'<tr><td colspan="{8 if es_admin else 7}" class="py-4 text-center text-muted">No hay cuentas corrientes para mostrar.</td></tr>'
 
     contenido = f"""
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
@@ -1521,15 +1790,55 @@ def cuenta_corriente():
     <section class="card border-0 shadow-sm">
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
-                <thead><tr><th>Cliente</th><th>Tipo</th><th class="text-end">Límite</th><th class="text-end">Cargos CC</th><th class="text-end">Cobros</th><th class="text-end">Saldo pendiente</th><th class="text-end">Uso del límite</th></tr></thead>
+                <thead><tr><th>Cliente</th><th>Tipo</th><th class="text-end">Límite</th><th class="text-end">Cargos CC</th><th class="text-end">Cobros</th><th class="text-end">Saldo pendiente</th><th class="text-end">Uso del límite</th>{'<th class="text-end">Editar límite</th>' if es_admin else ''}</tr></thead>
                 <tbody>{filas}</tbody>
-                <tfoot><tr class="table-light"><th colspan="5" class="text-end">Saldo total pendiente</th><th class="text-end">${saldo_total:,.2f}</th><th></th></tr></tfoot>
+                <tfoot><tr class="table-light"><th colspan="5" class="text-end">Saldo total pendiente</th><th class="text-end">${saldo_total:,.2f}</th><th colspan="{2 if es_admin else 1}"></th></tr></tfoot>
             </table>
         </div>
         <div class="card-footer bg-white small text-muted">Los saldos en 70% o más se resaltan para facilitar el seguimiento.</div>
     </section>
     """
     return render_layout("Cuentas corrientes", contenido, seccion_activa="cuenta_corriente")
+
+
+@app.route("/clientes/<int:id_cliente>/limite", methods=["POST"])
+def clientes_actualizar_limite(id_cliente):
+    if rol_actual() != "ADMIN":
+        return redirect(url_for(inicio_actual()))
+
+    try:
+        limite = Decimal(request.form.get("limite_credito", ""))
+        if not limite.is_finite() or limite < 0 or limite.as_tuple().exponent < -2:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        flash("El límite debe ser un importe válido, no negativo y con hasta dos decimales.", "warning")
+        return redirect(url_for("cuenta_corriente"))
+
+    conexion = None
+    cursor = None
+    try:
+        conexion = obtener_conexion()
+        cursor = conexion.cursor()
+        cursor.execute("""
+            UPDATE cliente
+            SET limite_credito = %s
+            WHERE id_cliente = %s
+        """, (limite, id_cliente))
+        if cursor.rowcount == 0:
+            flash("El cliente no existe o el límite no tuvo cambios.", "warning")
+        else:
+            conexion.commit()
+            flash("Límite de crédito actualizado.", "success")
+    except Exception as error:
+        if conexion:
+            conexion.rollback()
+        flash(f"No se pudo actualizar el límite: {error}", "danger")
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+    return redirect(url_for("cuenta_corriente"))
 
 
 # =====================================
