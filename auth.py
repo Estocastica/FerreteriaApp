@@ -151,8 +151,8 @@ def autenticar(username, password):
             "nombre": nombre_persona,
         }
     except Exception as error:
-        print(f"Error durante el proceso de autenticación: {error}")
-        return None
+        print(f"No se pudo completar la consulta de autenticación: {type(error).__name__}")
+        raise RuntimeError("No se pudo consultar la base de datos de usuarios.") from error
     finally:
         if cursor:
             cursor.close()

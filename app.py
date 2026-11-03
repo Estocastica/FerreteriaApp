@@ -2,11 +2,14 @@ import os
 import secrets
 import threading
 from decimal import Decimal, InvalidOperation
+from dotenv import load_dotenv
 from flask import Flask, request, redirect, url_for, flash, get_flashed_messages, session
 import mysql.connector
 from mysql.connector import pooling, errors
 import html
 from auth import PERFILES, autenticar, inicio_actual, perfil_actual, registrar_control_acceso, rol_actual
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FERRETERIA_SECRET_KEY") or secrets.token_hex(32)
@@ -66,7 +69,7 @@ def _crear_pool():
     pool_nombre = f"ferreteria_pool_{pid}"
     return pooling.MySQLConnectionPool(
         pool_name=pool_nombre,
-        pool_size=4,
+        pool_size=2,
         pool_reset_session=True,
         **cfg
     )
@@ -144,6 +147,7 @@ def render_layout(titulo, contenido, seccion_activa=""):
             ("cheques", "/cheques/", "bi-bank", "Cheques"),
             ("clientes", "/clientes", "bi-people-fill", "Clientes"),
             ("cuenta_corriente", "/cuenta-corriente", "bi-credit-card-2-front-fill", "Cuenta corriente"),
+            ("ferreteria_ia", "/ferreteria-ia", "bi-chat-dots-fill", "FerreterIA"),
             ("proveedores", "/proveedores", "bi-truck", "Proveedores"),
             ("alertas", "/alertas", "bi-exclamation-triangle-fill", "Alertas"),
             ("analisis", "/analisis/", "bi-graph-up-arrow", "Análisis de datos"),
@@ -346,8 +350,9 @@ def login():
         try:
             usuario = autenticar(username, password)
         except Exception as error:
-            print(f"Error autenticando usuario: {error}")
-            usuario = None
+            print(f"No se pudo consultar el usuario durante el login: {type(error).__name__}")
+            flash("La base de datos no está disponible para verificar el acceso. Inténtalo nuevamente.", "danger")
+            return redirect(url_for("login"))
 
         if not usuario:
             flash("Usuario o contraseña incorrectos, o cuenta inactiva.", "danger")
@@ -367,43 +372,6 @@ def login():
         f'<div class="alert alert-{html.escape(categoria)}" role="alert">{html.escape(mensaje)}</div>'
         for categoria, mensaje in get_flashed_messages(with_categories=True)
     )
-    usuarios_por_rol = {rol: [] for rol in PERFILES}
-    conexion = None
-    cursor = None
-    try:
-        conexion = obtener_conexion()
-        cursor = conexion.cursor()
-        cursor.execute(
-            "SELECT username, rol FROM usuario WHERE activo = 1 ORDER BY username"
-        )
-        for username, rol in cursor.fetchall():
-            if rol in usuarios_por_rol:
-                usuarios_por_rol[rol].append(str(username))
-    except Exception as error:
-        print(f"No se pudieron cargar las cuentas de demostración: {error}")
-    finally:
-        if cursor:
-            cursor.close()
-        if conexion:
-            conexion.close()
-
-    descripciones_perfil = {
-        "ADMIN": "Acceso total a todos los módulos y operaciones.",
-        "ADMINISTRACION": "Igual que Propietario, excepto registrar ventas y dar de alta productos.",
-        "DEPOSITO": "Consultar stock y cargar productos; no ve precios ni módulos comerciales.",
-        "VENDEDOR": "Registrar ventas, consultar el catálogo y sus propias ventas.",
-    }
-    perfiles_html = "".join(
-        f"""<article class="py-3 border-bottom">
-            <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2">
-                <h3 class="h6 fw-bold mb-1">{html.escape(PERFILES[rol]["nombre"])}</h3>
-                <span class="small">Usuario: {", ".join(html.escape(nombre) for nombre in usuarios_por_rol[rol]) or "Sin cuentas activas"}</span>
-            </div>
-            <p class="small text-muted mb-1">Contraseña: <code>1234</code></p>
-            <p class="small text-muted mb-0">{html.escape(descripciones_perfil[rol])}</p>
-        </article>"""
-        for rol in PERFILES
-    )
     return f"""<!DOCTYPE html>
     <html lang="es"><head>
         <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -413,8 +381,8 @@ def login():
         <main class="container min-vh-100 d-flex align-items-center justify-content-center py-4">
             <section class="card border-0 shadow-sm" style="width: min(100%, 960px);">
                 <div class="card-body p-4 p-md-5">
-                    <di class="row g-4 g-lg-5">
-                        <div class="col-lg-5">
+                    <div class="row justify-content-center">
+                        <div class="col-lg-6">
                             <h1 class="h3 fw-bold mb-1">Ferretería CANJER</h1>
                             <p class="text-muted mb-4">Inicia sesión para continuar</p>
                             {mensajes_login}
@@ -428,15 +396,6 @@ def login():
                                 <button class="btn btn-primary w-100" type="submit">Ingresar</button>
                             </form>
                         </div>
-                        <div class="col-lg-7">
-                            <section class="border-top border-lg-top-0 border-lg-start pt-4 pt-lg-0 ps-lg-4">
-                                <h2 class="h5 fw-bold mb-1">Perfiles de demostración</h2>
-                                <div class="alert alert-warning py-2 small my-3" role="note">
-                                    Maqueta: todos usan la contraseña <code>1234</code>. Cambiar antes de usar en producción.
-                                </div>
-                                {perfiles_html}
-                            </section>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -448,6 +407,105 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/ferreteria-ia", methods=["GET", "POST"])
+def ferreteria_ia():
+    historial = session.get("ferreteria_ia_historial", [])
+    error_chat = None
+
+    if request.method == "POST":
+        pregunta = request.form.get("pregunta", "").strip()
+        if not pregunta:
+            error_chat = "Escribe una pregunta para consultar."
+        elif len(pregunta) > 500:
+            error_chat = "La pregunta no puede superar los 500 caracteres."
+        else:
+            try:
+                from chatbot.ferreteria import responder_con_sql
+
+                sql, respuesta = responder_con_sql(pregunta)
+                historial.append({
+                    "pregunta": pregunta,
+                    "respuesta": str(respuesta)[:2000],
+                    "sql": str(sql)[:4000],
+                })
+                historial = historial[-5:]
+                session["ferreteria_ia_historial"] = historial
+            except Exception as error:
+                print(f"Error en consulta FerreterIA: {type(error).__name__}")
+                mensaje_error = str(error)
+                if "GROQ_API_KEY" in mensaje_error:
+                    error_chat = "Falta GROQ_API_KEY. Agrégala al archivo .env y reinicia la aplicación."
+                elif "MYSQL" in mensaje_error:
+                    error_chat = "Faltan variables de conexión MySQL en .env; completa MYSQL_ADDON_HOST, USER, PASSWORD y DB."
+                elif "Groq" in mensaje_error:
+                    error_chat = "Groq no pudo generar el SQL. Verifica GROQ_MODEL, tu cuota y el estado de la API."
+                elif "base de datos" in mensaje_error:
+                    error_chat = "El SQL se generó, pero MySQL no pudo ejecutarlo. Revisa las tablas y columnas disponibles."
+                else:
+                    error_chat = "No se pudo completar la consulta. Revisa el registro del servidor para ver en qué etapa falló."
+
+    historial_html = ""
+    for entrada in historial:
+        pregunta_html = html.escape(str(entrada.get("pregunta", "")))
+        respuesta_html = html.escape(str(entrada.get("respuesta", "")))
+        sql_html = html.escape(str(entrada.get("sql", "")))
+        historial_html += f"""
+        <article class="py-4 border-bottom">
+            <div class="d-flex justify-content-end mb-3">
+                <div class="bg-primary text-white rounded-3 px-3 py-2" style="max-width: 85%; white-space: pre-wrap">{pregunta_html}</div>
+            </div>
+            <div class="d-flex align-items-start gap-2">
+                <span class="text-primary fs-5"><i class="bi bi-stars"></i></span>
+                <div class="flex-grow-1">
+                    <p class="mb-2" style="white-space: pre-wrap">{respuesta_html}</p>
+                    <details>
+                        <summary class="small text-muted">Consulta SQL</summary>
+                        <pre class="bg-light border rounded p-3 mt-2 mb-0 small text-break"><code>{sql_html}</code></pre>
+                    </details>
+                </div>
+            </div>
+        </article>
+        """
+
+    error_html = (
+        f'<div class="alert alert-warning" role="alert">{html.escape(error_chat)}</div>'
+        if error_chat else ""
+    )
+    vacio_html = """<div class="text-center text-muted py-5">
+        <i class="bi bi-chat-square-text fs-1 d-block mb-3"></i>
+        <p class="mb-1 fw-semibold">¿Qué necesitas consultar?</p>
+        <p class="small mb-0">Pregunta sobre productos, stock, ventas o clientes.</p>
+    </div>""" if not historial_html else ""
+
+    contenido = f"""
+    <div class="row justify-content-center">
+        <div class="col-xl-9 col-lg-10">
+            <header class="mb-4">
+                <h1 class="h3 fw-bold mb-1"><i class="bi bi-chat-dots-fill text-primary me-2"></i>FerreterIA</h1>
+                <p class="text-muted mb-0">Consultas de gestión en lenguaje natural con su SQL correspondiente.</p>
+            </header>
+            <section class="card border-0 shadow-sm">
+                <div class="card-body px-3 px-md-4">
+                    {error_html}
+                    {vacio_html}
+                    {historial_html}
+                    <form method="post" class="pt-4">
+                        <label class="form-label fw-semibold" for="preguntaFerreteria">Tu pregunta</label>
+                        <div class="input-group">
+                            <textarea id="preguntaFerreteria" name="pregunta" class="form-control" rows="2" maxlength="500" placeholder="Ej.: ¿Qué productos están por debajo del stock mínimo?" required></textarea>
+                            <button type="submit" class="btn btn-primary px-3" title="Enviar consulta">
+                                <i class="bi bi-send-fill"></i><span class="visually-hidden">Enviar</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+    """
+    return render_layout("FerreterIA", contenido, seccion_activa="ferreteria_ia")
 
 
 # =====================================

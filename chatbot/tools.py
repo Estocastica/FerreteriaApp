@@ -1,0 +1,1 @@
+from chatbot.db import ejecutar_sql
